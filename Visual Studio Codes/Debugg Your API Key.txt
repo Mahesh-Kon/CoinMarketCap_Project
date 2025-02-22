@@ -6,7 +6,7 @@ url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
 
 headers = {
   'Accepts': 'application/json',
-  'X-CMC_PRO_API_KEY': 'Your_API_Key',
+  'X-CMC_PRO_API_KEY': 'Your_Coinmarketcap_API_Key',
 }
 
 try:
