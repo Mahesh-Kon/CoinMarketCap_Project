@@ -1,0 +1,84 @@
+#pip install requests azure-eventhub
+
+import requests
+from requests import Session
+import json
+from azure.eventhub import EventHubProducerClient, EventData
+import time
+
+# Adjust timeout (in seconds)
+TIMEOUT = 120  # 2 minutes timeout
+
+# CoinMarketCap API details
+API_KEY = 'Your_Coinmarketcap_API_Key'  # Replace with your CoinMarketCap API key
+URL = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
+HEADERS = {'X-CMC_PRO_API_KEY': API_KEY, 
+           'Accept': 'application/json'}
+
+PARAMETERS = {'limit':'100'} # Adjust the limit if you want,for free account max limit is 100.
+
+# Azure Event Hub details
+CONNECTION_STR = 'your Event Hub connection string'  # Replace with your Event Hub connection string
+EVENT_HUB_NAME = 'XXXX'  # Replace with your Event Hub name
+
+session = Session()
+session.headers.update(HEADERS)
+session.params.update(PARAMETERS)
+
+# Function to fetch the latest cryptocurrency data from CoinMarketCap
+def get_coinmarketcap_data():
+    response = session.get(URL,headers=HEADERS, params= PARAMETERS)
+    if response.status_code == 200:
+        data = response.json()
+        return data
+    else:
+        print("Error fetching data from CoinMarketCap:", response.status_code)
+        return None
+        
+    # Instead of sending one large batch, break the data into smaller chunks
+def send_data_in_chunks(data, chunk_size=10):
+    # Split the data into chunks of a specific size
+    for i in range(0, len(data), chunk_size):
+        chunk = data[i:i+chunk_size]
+        send_data_to_event_hub(chunk)
+
+        # Function to send data to Azure Event Hub
+def send_data_to_event_hub(data):
+    # Create an EventHubProducerClient instance
+    producer = EventHubProducerClient.from_connection_string(CONNECTION_STR, eventhub_name=EVENT_HUB_NAME)
+    
+    try:
+        # Prepare the event data as a JSON string
+        event_data_batch = producer.create_batch()
+        event_data = json.dumps(data)
+        
+        # Add event data to the batch
+        event_data_batch.add(EventData(event_data))
+        
+        # Send the batch of events to the Event Hub
+        producer.send_batch(event_data_batch, timeout=TIMEOUT)
+        print("Data sent to Azure Event Hub successfully.")
+    except Exception as e:
+        print("Error sending data to Event Hub:", e)
+    finally:
+        producer.close()
+
+# Main function to fetch data and send it to Event Hub in a loop
+def main():
+    while True:
+        print("Fetching data from CoinMarketCap...")
+        data = get_coinmarketcap_data()
+        if data:
+            print("Sending data to Azure Event Hub...")
+            send_data_to_event_hub(data)
+
+        else:
+            print("No data to send.")
+        
+        # Sleep for a defined interval (e.g., 60 seconds) before fetching data again
+        time.sleep(60)  # Adjust sleep time as needed
+
+
+# Run the script
+if __name__ == "__main__":
+    main()
