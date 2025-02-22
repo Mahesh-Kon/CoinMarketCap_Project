@@ -1,0 +1,78 @@
+%md
+**Pull Streaming data from ADLS Cointainer**
+
+df = spark.readStream.format("cloudFiles")\
+                     .option("cloudFiles.format", "json")\
+                     .option("cloudFiles.inferColumnTypes", "true")\
+                     .option("mergeSchema", "true")\
+                     .option("MultilineFile", "true")\
+                     .option("cloudFiles.schemaLocation", "/mnt/adls/raw-apidata/schema/")\
+                     .load("/mnt/adls")
+
+columns_to_drop = ["id", "optionsDefaults", "batchTimestampMs", "batchWatermarkMs", 
+                   "conf", "lastBackfillFinishTimeMs", "lastBackfillStartTimeMs", "lastInputPath","seqNum", "sourceVersion", "_rescued_data"]
+
+df = df.drop(*columns_to_drop)
+
+
+from pyspark.sql.functions import col
+
+# Get valid columns in DataFrame schema
+valid_columns = set(df.schema.fieldNames())
+
+# Remove unexpected columns
+df = df.select([col(c) for c in valid_columns if c != "nextBatchWatermarkMs"])
+
+%md
+**Flattened deeply nested json data with unique columns**
+
+from pyspark.sql.functions import col, explode, lit
+from pyspark.sql.types import StructType, ArrayType
+
+def flatten_struct(df):
+    """ Recursively flattens all StructType fields in a DataFrame """
+    while True:
+        struct_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, StructType)]
+        if not struct_cols:
+            break  # Stop when no StructType columns are left
+        
+        for struct_col in struct_cols:
+            # Flatten struct fields and rename with a unique prefix
+            expanded = [col(f"{struct_col}.{sub_field.name}").alias(f"{struct_col}_{sub_field.name}") 
+                        for sub_field in df.schema[struct_col].dataType.fields]
+            df = df.select(*[col for col in df.columns if col != struct_col], *expanded)
+    
+    return df
+
+def flatten_arrays(df):
+    """ Recursively explodes all ArrayType fields and renames them """
+    while True:
+        array_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, ArrayType)]
+        if not array_cols:
+            break  # Stop when no ArrayType columns are left
+        
+        for array_col in array_cols:
+            df = df.withColumn(array_col, explode(col(array_col)))  # Explode array
+            df = df.withColumnRenamed(array_col, f"{array_col}_array")  # Rename exploded column
+    
+    return df
+
+def flatten_dataframe(df):
+    """ Fully flattens a deeply nested DataFrame dynamically """
+    while True:
+        previous_columns = set(df.columns)  # Track columns before flattening
+        df = flatten_struct(df)  # Flatten struct fields
+        df = flatten_arrays(df)  # Explode array fields
+        
+        # Stop when no more changes are detected
+        if set(df.columns) == previous_columns:
+            break
+    
+    return df
+df_flattened = flatten_dataframe(df)
+
+df_bronze = df_flattened.writeStream.format("delta")\
+                        .outputMode("append")\
+                        .option("checkpointLocation", "Add your checkpointLocation ")\ 
+                        .start("Add your file location")\
+                        .awaitTermination()
